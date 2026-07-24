@@ -107,4 +107,58 @@ Google Apps Script (GAS) プロジェクト（clasp管理）に、気象庁の�
 
 - GASエディタで `fetchJmaXmlToSpreadsheet` を手動実行して動作確認
 - 定期実行が必要な場合は時間主導型トリガーの設定
-- 必要であれば対象フィードの追加（例: 台風情報、津波情報など）や、Area単位での詳細展開への変更
+- 必要であればArea単位での詳細展開への変更
+
+---
+
+## 追記: 2026-07-24 GAS↔ローカル同期 と gitリポジトリ化
+
+### clasp pull
+- GASエディタ側で追加されていた以下の関数をローカルに取り込むため `clasp pull` を実施
+  - `TestPost()`: Slack投稿のテスト関数
+  - `PostSlack(msg)`: スクリプトプロパティ `SLACK_WEBHOOK_URL` を使ってSlack Webhookに投稿する関数
+- pull前に `backup/getxml_20260724_145142.js` 等としてタイムスタンプ付きバックアップを作成してから実施（差分消失を防ぐため）
+
+### gitリポジトリ化
+- `git init` でローカルリポジトリを作成
+- `.gitignore` を作成（`backup/`, `node_modules/` を除外）
+- 初回コミット（`970f517`）: `.clasp.json` / `.gitignore` / `WORK_LOG.md` / `appsscript.json` / `getxml.js` を追加
+- リモート `origin` を `https://github.com/yoichigmf/bousaixmlget.git` に設定
+- `git push -u origin master` でGitHubへ初回push
+
+## 追記: 2026-07-24 台風情報・津波情報の追加対応
+
+### 調査
+- 気象庁XMLフォーマット公式ページ（`https://xml.kishou.go.jp/`）および電文一覧PDF（`xml.kishou.go.jp/xmllist.pdf`）を確認
+- atomフィードの分類は次の4種類:
+  - 定時（`regular.xml`）: 天気概況など定時発表
+  - 随時（`extra.xml`）: 警報・注意報や**台風情報**など随時発表
+  - 地震火山（`eqvol.xml`）: 地震・**津波情報**・火山に関する情報
+  - その他（`other.xml`）: 上記以外
+- **結論**: 台風情報は `extra.xml`、津波情報は `eqvol.xml` に既に含まれており、フィードURLの追加は不要。既存実装でも取得自体はできていた
+
+### 実装内容（`getxml.js` 追加分）
+- Controlタイトルを気象庁電文一覧の資料名に基づくキーワードで判定し、該当する電文を専用シートにも追記するよう変更
+  - 台風判定キーワード: `台風情報` `台風解析・予報情報` `台風の暴風域に入る確率` `発達する熱帯低気圧に関する情報`
+  - 津波判定キーワード: `津波警報` `津波注意報` `津波予報` `津波情報` `沖合の津波観測に関する情報` `南海トラフ地震臨時情報` `南海トラフ地震関連解説情報`
+- 追加シート: 「台風情報」「津波情報」（既存の「気象庁防災情報」シートとは別に、条件一致した電文のみ重複して追記）
+- 追加関数: `isTyphoonTitle_()` / `isTsunamiTitle_()` / `matchesAnyKeyword_()` / `appendRows_()`
+- `getOrCreateJmaSheet_()` をシート名引数化し、3シート（通常/台風/津波）で使い回せるよう変更
+- 各シートで `entryID` ベースの重複チェックを独立して実施
+
+### clasp push時のトラブルと対応
+- `.claspignore` が存在しなかったため、初回push時に `backup/` 配下のファイルも誤ってGASプロジェクトにpushされた
+- `.claspignore` を新規作成し、`appsscript.json` と `getxml.js` のみを対象にするよう設定
+- 誤pushされた `backup/getxml_20260724_145142.js` はclaspのpushだけでは削除できないため、GASエディタ側の手動削除をユーザーに依頼（本作業ログ時点では未削除の可能性あり）
+
+### 動作確認・反映
+- `node --check` によるJS構文チェック: OK
+- `npx clasp push` でGASプロジェクトへ反映
+- git: `676e822`「台風情報・津波情報を別シートに振り分ける機能を追加」としてコミットし、`git push origin master` でGitHub（`yoichigmf/bousaixmlget`）へ反映
+
+## 次のステップ（未実施・要望があれば対応）
+
+- GASエディタ上に残っている誤pushファイル（`backup/getxml_...`）の削除確認
+- `fetchJmaXmlToSpreadsheet` の定期実行トリガー設定
+- 台風・津波の電文検知時にSlack通知（`PostSlack`）と連携するかどうかの検討
+- Area単位での詳細展開が必要になった場合の設計変更
