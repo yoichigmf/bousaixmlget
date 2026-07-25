@@ -15,7 +15,7 @@ var JMA_TSUNAMI_SHEET_NAME = '津波情報';
 var JMA_HEADER = [
   'フィード', 'entryID', '発表時刻(entry)', 'フィードタイトル', '発表官署(author)', '概要(content)',
   'Controlタイトル', 'Control発表日時', 'ステータス', '発表官署(Control)',
-  '発表時刻(Head)', '情報種別(InfoType)', '情報分類(InfoKind)', '見出し'
+  '発表時刻(Head)', '情報種別(InfoType)', '情報分類(InfoKind)', '見出し', '対象地域(Area)'
 ];
 
 // 気象庁防災情報XML電文一覧（xml.kishou.go.jp/xmllist.pdf）の資料名に基づく判定キーワード
@@ -85,7 +85,8 @@ function fetchJmaXmlToSpreadsheet() {
         detail.headReportDateTime,
         detail.infoType,
         detail.infoKind,
-        detail.headline
+        detail.headline,
+        detail.areas
       ];
 
       rowsToAppend.push(row);
@@ -219,7 +220,7 @@ function getAuthorName_(entry, atomNs) {
 function fetchEntryDetail_(dataUrl) {
   var empty = {
     controlTitle: '', controlDateTime: '', status: '', publishingOffice: '',
-    headReportDateTime: '', infoType: '', infoKind: '', headline: ''
+    headReportDateTime: '', infoType: '', infoKind: '', headline: '', areas: ''
   };
   if (!dataUrl) {
     return empty;
@@ -241,7 +242,8 @@ function fetchEntryDetail_(dataUrl) {
     headReportDateTime: '',
     infoType: '',
     infoKind: '',
-    headline: ''
+    headline: '',
+    areas: ''
   };
 
   if (headEl) {
@@ -254,9 +256,37 @@ function fetchEntryDetail_(dataUrl) {
     if (headlineEl) {
       result.headline = getChildText_(headlineEl, 'Text', headNs);
     }
+
+    result.areas = collectAreaNames_(headEl).join(', ');
   }
 
   return result;
+}
+
+/**
+ * Head配下に含まれる全てのArea/Name要素を再帰的に収集し、重複を除いた配列で返す（階層は区別しない）。
+ */
+function collectAreaNames_(element) {
+  var names = [];
+  var seen = {};
+
+  function walk(el) {
+    var children = el.getChildren();
+    children.forEach(function (child) {
+      if (child.getName() === 'Area') {
+        var nameEl = child.getChild('Name', child.getNamespace());
+        var name = nameEl ? nameEl.getText() : '';
+        if (name && !seen[name]) {
+          seen[name] = true;
+          names.push(name);
+        }
+      }
+      walk(child);
+    });
+  }
+
+  walk(element);
+  return names;
 }
 
 /**
