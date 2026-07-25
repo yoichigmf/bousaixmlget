@@ -156,9 +156,26 @@ Google Apps Script (GAS) プロジェクト（clasp管理）に、気象庁の�
 - `npx clasp push` でGASプロジェクトへ反映
 - git: `676e822`「台風情報・津波情報を別シートに振り分ける機能を追加」としてコミットし、`git push origin master` でGitHub（`yoichigmf/bousaixmlget`）へ反映
 
+## 追記: 2026-07-25 対象地域(Area)列の追加
+
+### 方針確認
+- Areaは1電文に複数・多階層（府県予報区／一次細分区域／市町村等）含まれるため、表示方法をヒアリング
+  - 表示形式: **1行にカンマ区切りで列挙**（Areaごとに行分割はしない。既存の「1entry=1行」構造を維持）
+  - 対象階層: **全階層を区別せず列挙**（府県〜市町村等をまとめて重複除去）
+
+### 実装内容（`getxml.js`）
+- `JMA_HEADER` に列 `対象地域(Area)` を追加（最終列）
+- `collectAreaNames_(element)`: `Head`要素配下を再帰的に走査し、`Area/Name`のテキストを重複除去しつつ収集する関数を追加
+- `fetchEntryDetail_()` の戻り値に `areas`（カンマ区切り文字列）を追加し、`collectAreaNames_(headEl).join(', ')` で生成
+- 行データ生成箇所に `detail.areas` を追加
+
+### 動作確認・反映
+- `node --check` によるJS構文チェック: OK
+- `npx clasp push` でGASプロジェクトへ反映（`.claspignore`により不要ファイルは含まれず）
+- git: `afce65d`「Area(対象地域)をSpreadSheetの表示列に追加」としてコミットし、GitHubへpush
+
 ## 次のステップ（未実施・要望があれば対応）
 
-- ~~GASエディタ上に残っている誤pushファイル（`backup/getxml_...`）の削除確認~~ → 2026-07-25 ユーザーがGASエディタから手動削除し完了
 - `fetchJmaXmlToSpreadsheet` の定期実行トリガー設定
 - 台風・津波の電文検知時にSlack通知（`PostSlack`）と連携するかどうかの検討
-- Area単位での詳細展開が必要になった場合の設計変更
+- Area件数が非常に多い電文（府県全体の警報・注意報等）でセル文字数が肥大化しないかの実運用確認
