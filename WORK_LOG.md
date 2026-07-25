@@ -158,7 +158,7 @@ Google Apps Script (GAS) プロジェクト（clasp管理）に、気象庁の�
 
 ## 次のステップ（未実施・要望があれば対応）
 
-- GASエディタ上に残っている誤pushファイル（`backup/getxml_...`）の削除確認
+- ~~GASエディタ上に残っている誤pushファイル（`backup/getxml_...`）の削除確認~~ → 2026-07-25 ユーザーがGASエディタから手動削除し完了
 - `fetchJmaXmlToSpreadsheet` の定期実行トリガー設定
 - 台風・津波の電文検知時にSlack通知（`PostSlack`）と連携するかどうかの検討
 - Area単位での詳細展開が必要になった場合の設計変更
