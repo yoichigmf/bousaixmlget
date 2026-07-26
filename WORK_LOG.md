@@ -174,8 +174,29 @@ Google Apps Script (GAS) プロジェクト（clasp管理）に、気象庁の�
 - `npx clasp push` でGASプロジェクトへ反映（`.claspignore`により不要ファイルは含まれず）
 - git: `afce65d`「Area(対象地域)をSpreadSheetの表示列に追加」としてコミットし、GitHubへpush
 
+## 追記: 2026-07-26 台風情報・津波情報の別シート出力を削除
+
+### 経緯
+- 実際にデータ取得を実行したところ、GASの実行時間上限（6分）を超過してタイムアウトが発生
+- 原因は台風・津波判定処理そのものではなく、entry毎に個別XMLを`UrlFetchApp.fetch`で逐次取得する構造にあるが、まずは処理を軽くするため台風・津波の別シート振り分け機能を撤去する方針とした
+
+### 実装内容（`getxml.js`）
+- `JMA_TYPHOON_SHEET_NAME` / `JMA_TSUNAMI_SHEET_NAME` と関連定数を削除
+- `isTyphoonTitle_()` / `isTsunamiTitle_()` / `matchesAnyKeyword_()` を削除
+- `fetchJmaXmlToSpreadsheet()` を「気象庁防災情報」シートへの書き込みのみに簡素化
+- Area列（対象地域）の抽出・表示機能は維持
+
+### 動作確認・反映
+- `node --check` によるJS構文チェック: OK
+- `npx clasp push` でGASプロジェクトへ反映
+- git: `6637fe9`「台風情報・津波情報の別シート出力を削除」としてコミットし、GitHubへpush
+
+### 既知の課題（未解消）
+- 実行時間超過の根本原因である「entry毎の個別XML逐次取得」は未対応
+- フィードのentry件数が多い（＝新規データが多い）タイミングで再度タイムアウトする可能性が残っている
+
 ## 次のステップ（未実施・要望があれば対応）
 
 - `fetchJmaXmlToSpreadsheet` の定期実行トリガー設定
-- 台風・津波の電文検知時にSlack通知（`PostSlack`）と連携するかどうかの検討
+- 実行時間超過対策: 1回の実行で処理するentry件数の上限設定、または未処理分を次回に持ち越す仕組みの検討
 - Area件数が非常に多い電文（府県全体の警報・注意報等）でセル文字数が肥大化しないかの実運用確認
