@@ -9,22 +9,11 @@ var JMA_FEEDS = [
 ];
 
 var JMA_SHEET_NAME = '気象庁防災情報';
-var JMA_TYPHOON_SHEET_NAME = '台風情報';
-var JMA_TSUNAMI_SHEET_NAME = '津波情報';
 
 var JMA_HEADER = [
   'フィード', 'entryID', '発表時刻(entry)', 'フィードタイトル', '発表官署(author)', '概要(content)',
   'Controlタイトル', 'Control発表日時', 'ステータス', '発表官署(Control)',
   '発表時刻(Head)', '情報種別(InfoType)', '情報分類(InfoKind)', '見出し', '対象地域(Area)'
-];
-
-// 気象庁防災情報XML電文一覧（xml.kishou.go.jp/xmllist.pdf）の資料名に基づく判定キーワード
-var JMA_TYPHOON_TITLE_KEYWORDS = [
-  '台風情報', '台風解析・予報情報', '台風の暴風域に入る確率', '発達する熱帯低気圧に関する情報'
-];
-var JMA_TSUNAMI_TITLE_KEYWORDS = [
-  '津波警報', '津波注意報', '津波予報', '津波情報', '沖合の津波観測に関する情報',
-  '南海トラフ地震臨時情報', '南海トラフ地震関連解説情報'
 ];
 
 
@@ -53,16 +42,8 @@ function PostSlack( msg ) {
  */
 function fetchJmaXmlToSpreadsheet() {
   var sheet = getOrCreateJmaSheet_(JMA_SHEET_NAME);
-  var typhoonSheet = getOrCreateJmaSheet_(JMA_TYPHOON_SHEET_NAME);
-  var tsunamiSheet = getOrCreateJmaSheet_(JMA_TSUNAMI_SHEET_NAME);
-
   var existingIds = getExistingEntryIds_(sheet);
-  var existingTyphoonIds = getExistingEntryIds_(typhoonSheet);
-  var existingTsunamiIds = getExistingEntryIds_(tsunamiSheet);
-
   var rowsToAppend = [];
-  var typhoonRows = [];
-  var tsunamiRows = [];
 
   JMA_FEEDS.forEach(function (feed) {
     var entries = fetchFeedEntries_(feed.url);
@@ -71,7 +52,7 @@ function fetchJmaXmlToSpreadsheet() {
         return;
       }
       var detail = fetchEntryDetail_(entry.dataUrl);
-      var row = [
+      rowsToAppend.push([
         feed.name,
         entry.id,
         entry.updated,
@@ -87,53 +68,14 @@ function fetchJmaXmlToSpreadsheet() {
         detail.infoKind,
         detail.headline,
         detail.areas
-      ];
-
-      rowsToAppend.push(row);
+      ]);
       existingIds[entry.id] = true;
-
-      if (isTyphoonTitle_(detail.controlTitle) && !existingTyphoonIds[entry.id]) {
-        typhoonRows.push(row);
-        existingTyphoonIds[entry.id] = true;
-      } else if (isTsunamiTitle_(detail.controlTitle) && !existingTsunamiIds[entry.id]) {
-        tsunamiRows.push(row);
-        existingTsunamiIds[entry.id] = true;
-      }
     });
   });
 
   appendRows_(sheet, rowsToAppend);
-  appendRows_(typhoonSheet, typhoonRows);
-  appendRows_(tsunamiSheet, tsunamiRows);
 
-  Logger.log('%s 件の新規データを書き込みました（台風: %s件, 津波: %s件）。',
-    rowsToAppend.length, typhoonRows.length, tsunamiRows.length);
-}
-
-/**
- * Controlタイトルが台風関連の資料名に該当するか判定する。
- */
-function isTyphoonTitle_(title) {
-  return matchesAnyKeyword_(title, JMA_TYPHOON_TITLE_KEYWORDS);
-}
-
-/**
- * Controlタイトルが津波関連の資料名に該当するか判定する。
- */
-function isTsunamiTitle_(title) {
-  return matchesAnyKeyword_(title, JMA_TSUNAMI_TITLE_KEYWORDS);
-}
-
-/**
- * タイトルにキーワードのいずれかが部分一致するか判定する。
- */
-function matchesAnyKeyword_(title, keywords) {
-  if (!title) {
-    return false;
-  }
-  return keywords.some(function (keyword) {
-    return title.indexOf(keyword) !== -1;
-  });
+  Logger.log('%s 件の新規データを書き込みました。', rowsToAppend.length);
 }
 
 /**
