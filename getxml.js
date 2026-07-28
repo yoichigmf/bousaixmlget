@@ -9,12 +9,23 @@ var JMA_FEEDS = [
 ];
 
 var JMA_SHEET_NAME = '気象庁防災情報';
+var JMA_QUEUE_SHEET_NAME = '_queue';
 
 var JMA_HEADER = [
   'フィード', 'entryID', '発表時刻(entry)', 'フィードタイトル', '発表官署(author)', '概要(content)',
   'Controlタイトル', 'Control発表日時', 'ステータス', '発表官署(Control)',
   '発表時刻(Head)', '情報種別(InfoType)', '情報分類(InfoKind)', '見出し', '対象地域(Area)'
 ];
+
+// キューシートの列構成。「問い合わせ日時」が同一取得回のグループキーとなる。
+var JMA_QUEUE_HEADER = [
+  '問い合わせ日時', 'フィード', 'entryID', '発表時刻(entry)', 'フィードタイトル', '発表官署(author)', '概要(content)', 'dataUrl'
+];
+
+// processJmaXmlQueue の1回の実行で処理するキュー件数の上限（実行時間超過対策）
+var JMA_QUEUE_BATCH_SIZE = 30;
+// GAS実行時間上限（6分=360秒）に対する安全マージン。この秒数を超えたら残りは次回実行に持ち越す
+var JMA_QUEUE_TIME_LIMIT_MS = 4.5 * 60 * 1000;
 
 // 震度階級コード（Body/Intensity/Observation/MaxInt）の並び。震度5弱以上の判定に使用する。
 var JMA_INTENSITY_ORDER = ['1', '2', '3', '4', '5-', '5+', '6-', '6+', '7'];
@@ -93,6 +104,145 @@ function fetchJmaXmlToSpreadsheet() {
   });
 
   Logger.log('%s 件の新規データを書き込みました（通知: %s件）。', rowsToAppend.length, alertMessages.length);
+}
+
+/**
+ * 【実行時間超過対策：取得フェーズ】
+ * 各フィードから新規entryを検出し、個別XMLは取得せずキューシートに追記するだけの軽量処理。
+ * 「問い合わせ日時」を全行共通のキーとして持たせ、同一取得回のグループを識別できるようにする。
+ */
+function enqueueJmaXmlEntries() {
+  var sheet = getOrCreateJmaSheet_(JMA_SHEET_NAME);
+  var queueSheet = getOrCreateQueueSheet_();
+  var existingIds = getExistingEntryIds_(sheet);
+  var queuedIds = getExistingEntryIds_(queueSheet, 3); // キューのentryID列はC列(3列目)
+
+  var queriedAt = new Date();
+  var rowsToQueue = [];
+
+  JMA_FEEDS.forEach(function (feed) {
+    var entries = fetchFeedEntries_(feed.url);
+    entries.forEach(function (entry) {
+      if (existingIds[entry.id] || queuedIds[entry.id]) {
+        return;
+      }
+      rowsToQueue.push([
+        queriedAt,
+        feed.name,
+        entry.id,
+        entry.updated,
+        entry.title,
+        entry.author,
+        entry.content,
+        entry.dataUrl
+      ]);
+      queuedIds[entry.id] = true;
+    });
+  });
+
+  if (rowsToQueue.length > 0) {
+    queueSheet.getRange(queueSheet.getLastRow() + 1, 1, rowsToQueue.length, JMA_QUEUE_HEADER.length)
+      .setValues(rowsToQueue);
+  }
+
+  Logger.log('%s 件の新規entryをキューに追加しました（問い合わせ日時: %s）。', rowsToQueue.length, queriedAt);
+}
+
+/**
+ * 【実行時間超過対策：処理フェーズ】
+ * キューシートの先頭からJMA_QUEUE_BATCH_SIZE件（または時間切れまで）を取り出し、
+ * 個別XML取得・パース・メインシート書き込み・Slack通知判定を行い、処理済み行をキューから削除する。
+ * 1回の実行で処理しきれない場合は残りを次回の実行に持ち越す。
+ */
+function processJmaXmlQueue() {
+  var startTime = Date.now();
+  var sheet = getOrCreateJmaSheet_(JMA_SHEET_NAME);
+  var queueSheet = getOrCreateQueueSheet_();
+
+  var queueLastRow = queueSheet.getLastRow();
+  if (queueLastRow <= 1) {
+    Logger.log('キューは空です。');
+    return;
+  }
+
+  var queueRowCount = Math.min(JMA_QUEUE_BATCH_SIZE, queueLastRow - 1);
+  var queueRange = queueSheet.getRange(2, 1, queueRowCount, JMA_QUEUE_HEADER.length);
+  var queueValues = queueRange.getValues();
+
+  var rowsToAppend = [];
+  var alertMessages = [];
+  var processedCount = 0;
+
+  for (var i = 0; i < queueValues.length; i++) {
+    if (Date.now() - startTime > JMA_QUEUE_TIME_LIMIT_MS) {
+      break;
+    }
+
+    var queueRow = queueValues[i];
+    var feedName = queueRow[1];
+    var entryId = queueRow[2];
+    var entryUpdated = queueRow[3];
+    var entryTitle = queueRow[4];
+    var entryAuthor = queueRow[5];
+    var entryContent = queueRow[6];
+    var dataUrl = queueRow[7];
+
+    var detail = fetchEntryDetail_(dataUrl);
+    rowsToAppend.push([
+      feedName,
+      entryId,
+      entryUpdated,
+      entryTitle,
+      entryAuthor,
+      entryContent,
+      detail.controlTitle,
+      detail.controlDateTime,
+      detail.status,
+      detail.publishingOffice,
+      detail.headReportDateTime,
+      detail.infoType,
+      detail.infoKind,
+      detail.headline,
+      detail.areas
+    ]);
+
+    var alertReason = getAlertReason_(detail);
+    if (alertReason) {
+      alertMessages.push(buildAlertMessage_(alertReason, { dataUrl: dataUrl, content: entryContent, updated: entryUpdated }, detail));
+    }
+
+    processedCount++;
+  }
+
+  appendRows_(sheet, rowsToAppend);
+
+  alertMessages.forEach(function (message) {
+    PostSlack(message);
+  });
+
+  if (processedCount > 0) {
+    queueSheet.deleteRows(2, processedCount);
+  }
+
+  var remaining = queueSheet.getLastRow() - 1;
+  Logger.log('%s 件を処理しました（通知: %s件）。キュー残り: %s件。',
+    processedCount, alertMessages.length, remaining);
+}
+
+/**
+ * キューシートを取得（無ければ作成しヘッダーを設定）する。
+ */
+function getOrCreateQueueSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(JMA_QUEUE_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(JMA_QUEUE_SHEET_NAME);
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, JMA_QUEUE_HEADER.length).setValues([JMA_QUEUE_HEADER]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
 }
 
 /**
@@ -222,15 +372,16 @@ function getOrCreateJmaSheet_(sheetName) {
 }
 
 /**
- * シート内の既存entryID（B列）を重複チェック用に取得する。
+ * シート内の既存entryIDを重複チェック用に取得する（列番号省略時はB列=2列目）。
  */
-function getExistingEntryIds_(sheet) {
+function getExistingEntryIds_(sheet, columnIndex) {
   var ids = {};
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) {
     return ids;
   }
-  var values = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+  var col = columnIndex || 2;
+  var values = sheet.getRange(2, col, lastRow - 1, 1).getValues();
   values.forEach(function (row) {
     if (row[0]) {
       ids[row[0]] = true;
